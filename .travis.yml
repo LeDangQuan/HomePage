@@ -1,0 +1,87 @@
+language: node_js
+cache:
+  directories:
+    - ~/.npm
+    - node_modules/cypress/dist
+
+# Trigger a push build on master and greenkeeper branches + PRs build on every branches
+# Avoid double build on PRs (See https://github.com/travis-ci/travis-ci/issues/1147)
+branches:
+  only:
+    - master
+    - /^greenkeeper.*$/
+
+stages:
+  - test
+  - name: greenkeeper-routes-update
+    if: branch =~ ^greenkeeper/@octokit/routes
+  - name: release
+    if: branch = master AND type IN (push)
+
+jobs:
+  include:
+    - stage: test
+      node_js: 6
+      script:
+        - npm run start-fixtures-server &
+        - sleep 3 # give server some time to start
+        - npm run test
+    - node_js: 8
+      script:
+        - npm run start-fixtures-server &
+        - sleep 3 # give server some time to start
+        - npm run test
+    - node_js: 9
+      env: Node 9, coverage upload
+      script:
+        - npm run start-fixtures-server &
+        - sleep 3 # give server some time to start
+        - npm run test
+        - npm run coverage:upload
+    - node_js: 4 # will be removed in v16
+      env: Node 4, smoke test only
+      script:
+        - node index.js
+    - node_js: lts/*
+      env: browser tests
+      script:
+        - npm run start-fixtures-server &
+        - sleep 3 # give server some time to start
+        - npm run test:browser
+    - node_js: lts/*
+      sudo: required
+      addons:
+        chrome: stable
+      env: bundle size, typescript validation
+      script:
+        # test bundle size
+        - npm run build:browser
+        - npx bundlesize
+        # test typescript definitions
+        - npm run validate:ts
+
+    # when updating @octokit/routes, run "generate-routes" script and push
+    # new routes.json file to the pull request
+    - stage: greenkeeper-routes-update
+      node_js: lts/*
+      script:
+        - git checkout $TRAVIS_BRANCH
+        - npm run generate-routes
+        # commit changes and push back to branch on GitHub. If there are no changes then exit without error
+        - 'git commit -a -m "build: routes" --author="Octokit Bot <octokitbot@martynus.net>" && git push "https://${GH_TOKEN}@github.com/$TRAVIS_REPO_SLUG" ${TRAVIS_BRANCH} || true'
+
+    # release stage: run semantic release & update the docs
+    - stage: release
+      node_js: lts/*
+      env: semantic-release
+      script:
+        - npm run build:flow
+        - npm run build:ts
+        - npm run build:browser
+        - npm run generate-bundle-report
+        - npm run semantic-release
+    - node_js: lts/*
+      env: docs update
+      script:
+        - npm run build:docs
+        - npm run deploy-docs
